@@ -125,13 +125,16 @@ ds_dir = Path(f"./datasets/{args.dataset}")
 (ds_dir / "meta").mkdir(parents=True, exist_ok=True)
 (ds_dir / "data" / "chunk-000").mkdir(parents=True, exist_ok=True)
 
+# extract episode index from input filename
+ep_idx = int(h5_path.stem.split("_")[-1])  # e.g. episode_000001.h5 -> 1
+
 records = []
 for i in range(n_frames):
     records.append({
         "observation.state": joint_angles_all[i].tolist(),
         "action": joint_angles_all[i].tolist(),
         "timestamp": float(timestamps[i]),
-        "episode_index": 0,
+        "episode_index": int(ep_idx),
         "index": i,
         "task_index": 0,
         "next.done": (i == n_frames - 1),
@@ -139,7 +142,7 @@ for i in range(n_frames):
     })
 
 df = pd.DataFrame(records)
-pq_path = ds_dir / "data" / "chunk-000" / "episode_000000.parquet"
+pq_path = ds_dir / "data" / "chunk-000" / f"episode_{ep_idx:06d}.parquet"
 df.to_parquet(str(pq_path), engine="pyarrow")
 
 features = {k: v for k, v in {

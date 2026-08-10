@@ -102,7 +102,10 @@ n_frames = len(timestamps)
 print(f"  Recorded {n_frames} frames at {args.fps} FPS")
 
 # Save HDF5
-h5_path = output_dir / "episode_000000.h5"
+# auto-increment episode number
+existing = sorted(output_dir.glob("episode_*.h5"))
+next_idx = len(existing)
+h5_path = output_dir / f"episode_{next_idx:06d}.h5"
 with h5py.File(str(h5_path), "w") as f:
     f.create_dataset("timestamp", data=np.array(timestamps, dtype=np.float32))
     f.create_dataset("observation.left_hand.wrist_pose", data=np.array([x[:7] for x in left_wrists], dtype=np.float32))
