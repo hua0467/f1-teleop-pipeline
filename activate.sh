@@ -1,0 +1,15 @@
+#!/bin/bash
+# F1 Teleop Pipeline - 激活开发环境 (Git Bash / Linux)
+source /c/ProgramData/miniconda3/Scripts/activate f1-teleop
+echo ""
+echo "============================================"
+echo "  F1 Teleop Pipeline 开发环境已激活"
+echo "  Python: $(python --version)"
+echo "  工作目录: $(pwd)"
+echo "============================================"
+echo ""
+echo "可用脚本:"
+echo "  python scripts/01_test_environment.py   环境验证"
+echo "  python scripts/02_record_episode.py     录制演示"
+echo "  python scripts/03_convert_to_lerobot.py 转LeRobot格式"
+echo ""

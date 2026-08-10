@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Generated data
+recordings/
+datasets/
+
+# Binary files
+*.apk
+pico_apps/
+
+# OS
+.DS_Store
+Thumbs.db
