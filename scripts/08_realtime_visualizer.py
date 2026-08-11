@@ -582,10 +582,13 @@ function clearAlerts() { alertBuffer = []; renderAlerts(); }
 // 录制
 // ========================================================================
 function toggleRecord() {
-  if (recording) {
-    ws.send(JSON.stringify({ type: 'stop_record' }));
-  } else {
+  // 即时反馈，不等服务器
+  const newState = !recording;
+  setRecordingUI(newState);
+  if (newState) {
     ws.send(JSON.stringify({ type: 'start_record' }));
+  } else {
+    ws.send(JSON.stringify({ type: 'stop_record' }));
   }
 }
 function setRecordingUI(isRecording) {
@@ -615,7 +618,9 @@ function updateStatusBar(status) {
 
   // 状态灯
   const dot = document.getElementById('status-dot');
-  dot.className = 'status-dot ' + ((status.frame_count || 0) > 0 ? 'green' : 'red');
+  const hasData = (status.frame_count || 0) > 0;
+  dot.className = 'status-dot ' + (hasData ? 'green' : 'yellow');
+  dot.title = hasData ? '数据正常' : '等待VR数据...';
 
   // 录制状态
   if (status.recording !== recording) setRecordingUI(status.recording);
@@ -635,8 +640,8 @@ function connect() {
   ws = new WebSocket(`${proto}//${location.host}/ws`);
 
   ws.onopen = () => {
-    console.log('[WS] 已连接');
     document.getElementById('status-dot').className = 'status-dot yellow';
+    document.getElementById('status-dot').title = 'WebSocket已连接，等待VR数据...';
     if (reconnectTimer) { clearInterval(reconnectTimer); reconnectTimer = null; }
   };
 
@@ -676,6 +681,10 @@ function connect() {
       updateStatusBar(msg.data);
     }
 
+    if (msg.type === 'recording_changed') {
+      setRecordingUI(msg.recording);
+    }
+
     if (msg.type === 'alert') {
       pushAlert(msg.time, msg.level, msg.msg);
     }
@@ -683,6 +692,7 @@ function connect() {
 
   ws.onclose = () => {
     document.getElementById('status-dot').className = 'status-dot red';
+    document.getElementById('status-dot').title = '已断开，3秒后自动重连...';
     if (!reconnectTimer) reconnectTimer = setInterval(connect, 3000);
   };
 
@@ -851,8 +861,10 @@ async def websocket_endpoint(ws: WebSocket):
 
             if msg.get("type") == "start_record":
                 state.start_recording()
+                await _safe_send(ws, {"type": "recording_changed", "recording": True})
             elif msg.get("type") == "stop_record":
                 frames = state.stop_recording()
+                await _safe_send(ws, {"type": "recording_changed", "recording": False})
                 if frames:
                     h5_path = _save_hdf5(frames, state)
                     await _safe_send(ws, {
