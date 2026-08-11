@@ -22,12 +22,9 @@ import argparse
 import asyncio
 import json
 import socket
-import struct
 import threading
 import time
-import queue
 from collections import deque
-from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -63,7 +60,6 @@ class DashboardState:
 
         # 当前帧
         self.current: dict | None = None
-        self.current_raw_wrist: dict = {"left": None, "right": None}
 
         # 告警
         self.alerts: deque = deque(maxlen=200)
@@ -783,7 +779,7 @@ async def api_record_stop(request: Request):
 
 
 def _save_hdf5(frames: list, state: DashboardState) -> Path:
-    """把录制缓冲区的帧存成 HDF5"""
+    """把录制缓冲区的帧存成 HDF5（弧度和完整的7值手腕位姿）"""
     import h5py
 
     output_dir = Path("./recordings")
@@ -796,18 +792,30 @@ def _save_hdf5(frames: list, state: DashboardState) -> Path:
     if n == 0:
         return h5_path
 
+    # 角度制 → 弧度制（帧里是角度给图表看的，存文件得用弧度）
     timestamps = np.array([f["ts"] for f in frames], dtype=np.float32)
-    joints = np.array([f["joints"] for f in frames], dtype=np.float32)
-    right_wrists = np.array([f.get("right_wrist", [0]*3) for f in frames], dtype=np.float32)
-    left_wrists = np.array([f.get("left_wrist", [0]*3) for f in frames], dtype=np.float32)
+    joints_deg = np.array([f["joints"] for f in frames], dtype=np.float32)
+    joints_rad = np.radians(joints_deg)
+
+    # 原始VR手腕位姿（7值: xyz + qxyzw），优先取 raw 字段
+    def _pad7(arr):
+        arr = np.array(arr, dtype=np.float32)
+        if len(arr) >= 7:
+            return arr[:7]
+        padded = np.zeros(7, dtype=np.float32)
+        padded[:len(arr)] = arr
+        return padded
+
+    right_wrists = np.array([_pad7(f.get("right_wrist_raw", f.get("right_wrist", [0]*7))) for f in frames], dtype=np.float32)
+    left_wrists  = np.array([_pad7(f.get("left_wrist_raw",  f.get("left_wrist",  [0]*7))) for f in frames], dtype=np.float32)
 
     with h5py.File(str(h5_path), "w") as f:
         f.create_dataset("timestamp", data=timestamps)
-        f.create_dataset("observation.state", data=joints)
-        f.create_dataset("action", data=joints)
+        f.create_dataset("observation.state", data=joints_rad)
+        f.create_dataset("action", data=joints_rad)
         f.create_dataset("observation.right_hand.wrist_pose", data=right_wrists)
         f.create_dataset("observation.left_hand.wrist_pose", data=left_wrists)
-        f.create_dataset("episode_index", data=np.zeros(n, dtype=np.int64))
+        f.create_dataset("episode_index", data=np.full(n, next_idx, dtype=np.int64))
         f.create_dataset("task_index", data=np.zeros(n, dtype=np.int64))
         f.create_dataset("index", data=np.arange(n, dtype=np.int64))
         f.attrs["total_frames"] = n
@@ -815,23 +823,60 @@ def _save_hdf5(frames: list, state: DashboardState) -> Path:
         f.attrs["source"] = "VR_realtime_recording"
         f.attrs["recorded_at"] = datetime.now().isoformat()
 
-    print(f"[REC] 已保存: {h5_path} ({n} 帧)")
+    print(f"[REC] 已保存 HDF5: {h5_path} ({n} 帧, 弧度制)")
 
-    # 自动跑离线 IK 生成 LeRobot
+    # 直接生成 LeRobot parquet（已经算了IK，不需要再调离线脚本）
     try:
-        import subprocess
-        import sys
-        script = Path(__file__).parent / "07_offline_ik.py"
-        if script.exists():
-            print(f"[REC] 自动触发离线 IK 处理...")
-            subprocess.Popen([
-                sys.executable, str(script),
-                "--input", str(h5_path),
-                "--dataset", "f1_vr_v1",
-                "--task", "recorded from dashboard",
-            ])
+        import pandas as pd
+        ds_dir = Path("./datasets/f1_vr_v1")
+        (ds_dir / "meta").mkdir(parents=True, exist_ok=True)
+        (ds_dir / "data" / "chunk-000").mkdir(parents=True, exist_ok=True)
+
+        pq_path = ds_dir / "data" / "chunk-000" / f"episode_{next_idx:06d}.parquet"
+        records = []
+        for i in range(n):
+            records.append({
+                "observation.state": joints_rad[i].tolist(),
+                "action": joints_rad[i].tolist(),
+                "timestamp": float(timestamps[i]),
+                "episode_index": int(next_idx),
+                "index": i,
+                "task_index": 0,
+                "next.done": (i == n - 1),
+                "next.reward": 1.0 if i == n - 1 else 0.0,
+            })
+        df = pd.DataFrame(records)
+        df.to_parquet(str(pq_path), engine="pyarrow")
+        print(f"[REC] 已生成 LeRobot: {pq_path}")
+
+        # 更新 meta
+        import json
+        joint_names = state.JOINT_NAMES
+        try:
+            if hasattr(state, "ik_processor") and state.ik_processor:
+                joint_names = state.ik_processor.all_joint_names
+        except Exception:
+            pass
+
+        info_path = ds_dir / "meta" / "info.json"
+        if info_path.exists():
+            with open(info_path) as jf:
+                info = json.load(jf)
+            info["total_episodes"] = info.get("total_episodes", 0) + 1
+            info["total_frames"] = info.get("total_frames", 0) + n
+            info["joint_names"] = list(joint_names)
+            info["n_joints"] = len(joint_names)
+            with open(info_path, "w") as jf:
+                json.dump(info, jf, indent=2, ensure_ascii=False)
+
+        with open(ds_dir / "meta" / "episodes.jsonl", "a") as jf:
+            jf.write(json.dumps({"episode_index": int(next_idx), "tasks": ["VR录制"], "length": n}, ensure_ascii=False) + "\n")
+        with open(ds_dir / "meta" / "tasks.jsonl", "a") as jf:
+            jf.write(json.dumps({"task_index": int(next_idx), "task": "VR录制"}, ensure_ascii=False) + "\n")
+
     except Exception as e:
-        print(f"[REC] 离线 IK 触发失败: {e}")
+        print(f"[REC] LeRobot 生成失败: {e}")
+        print("[REC] 提示: 可以手动跑 python scripts/07_offline_ik.py --input", h5_path)
 
     return h5_path
 
@@ -926,11 +971,13 @@ async def processing_loop(state: DashboardState, ik: IKProcessor | None, fps: in
             continue
 
         ts = time.time()
+        r_raw = last_wrist.get("Right")  # 7值原始VR数据
+        l_raw = last_wrist.get("Left")
         frame = {
             "ts": ts,
             "joints": None,
-            "right_wrist": last_wrist.get("Right"),
-            "left_wrist": last_wrist.get("Left"),
+            "right_wrist": r_raw,
+            "left_wrist": l_raw,
             "right_ik_ok": False,
             "left_ik_ok": False,
         }
@@ -938,14 +985,16 @@ async def processing_loop(state: DashboardState, ik: IKProcessor | None, fps: in
         # IK
         if ik is not None and state.ik_enabled:
             result = ik.solve_frame(
-                last_wrist.get("Right"),
-                last_wrist.get("Left"),
+                r_raw,
+                l_raw,
                 state.right_guess,
                 state.left_guess,
             )
             frame["joints"] = result["joints"]
-            frame["right_wrist"] = result["right_wrist"]
+            frame["right_wrist"] = result["right_wrist"]   # 3值（IK后的位置，给面板显示）
             frame["left_wrist"] = result["left_wrist"]
+            frame["right_wrist_raw"] = r_raw               # 7值原始VR数据（给HDF5存）
+            frame["left_wrist_raw"] = l_raw
             frame["right_ik_ok"] = result["right_ik_ok"]
             frame["left_ik_ok"] = result["left_ik_ok"]
             state.right_guess = result["right_guess"]
@@ -1023,7 +1072,6 @@ def main():
 
     # 挂到 app 上
     app.state.dashboard = state
-    app.state.ik_processor = ik
 
     # 回放模式 vs 实时模式
     if args.replay:
