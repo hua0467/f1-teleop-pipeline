@@ -30,6 +30,9 @@ from pathlib import Path
 
 import numpy as np
 
+# 官方 LeRobot API（参照 openpi convert_aloha_data_to_lerobot.py）
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
 # ============================================================================
 # 命令行参数
 # ============================================================================
@@ -824,306 +827,61 @@ def _save_hdf5(frames: list, state: DashboardState) -> Path:
         f.attrs["recorded_at"] = datetime.now().isoformat()
 
     print(f"[REC] 已保存 HDF5: {h5_path} ({n} 帧, 弧度制)")
-
-    # 直接生成 LeRobot parquet（已经算了IK，不需要再调离线脚本）
+    # ---- LeRobot (official API, 参照 openpi convert_aloha_data_to_lerobot.py) ----
     try:
-        import pandas as pd
-        ds_dir = Path("./datasets/f1_vr_v1")
-        (ds_dir / "meta").mkdir(parents=True, exist_ok=True)
-        (ds_dir / "data" / "chunk-000").mkdir(parents=True, exist_ok=True)
+        ds_root = Path("./datasets")
+        ds_repo_id = "f1_vr_v1"
+        ds_full_path = ds_root / ds_repo_id
 
-        pq_path = ds_dir / "data" / "chunk-000" / f"episode_{next_idx:06d}.parquet"
-        records = []
-        for i in range(n):
-            records.append({
-                "observation.state": joints_rad[i].tolist(),
-                "action": joints_rad[i].tolist(),
-                "timestamp": float(timestamps[i]),
-                "episode_index": int(next_idx),
-                "index": i,
-                "task_index": 0,
-                "next.done": (i == n - 1),
-                "next.reward": 1.0 if i == n - 1 else 0.0,
-            })
-        df = pd.DataFrame(records)
-        df.to_parquet(str(pq_path), engine="pyarrow")
-        print(f"[REC] 已生成 LeRobot: {pq_path}")
-
-        # 更新 meta
-        import json
-        joint_names = state.JOINT_NAMES
+        # 从 IK processor 拿规范关节名
+        joint_name_list = state.JOINT_NAMES
         try:
             if hasattr(state, "ik_processor") and state.ik_processor:
-                joint_names = state.ik_processor.all_joint_names
+                joint_name_list = [str(j) for j in state.ik_processor.all_joint_names]
         except Exception:
             pass
+        n_joints = len(joint_name_list)
 
-        info_path = ds_dir / "meta" / "info.json"
-        if info_path.exists():
-            with open(info_path) as jf:
-                info = json.load(jf)
-            info["total_episodes"] = info.get("total_episodes", 0) + 1
-            info["total_frames"] = info.get("total_frames", 0) + n
-            info["joint_names"] = list(joint_names)
-            info["n_joints"] = len(joint_names)
-            with open(info_path, "w") as jf:
-                json.dump(info, jf, indent=2, ensure_ascii=False)
+        features = {
+            "observation.state": {
+                "dtype": "float32",
+                "shape": (n_joints,),
+                "names": [joint_name_list],
+            },
+            "action": {
+                "dtype": "float32",
+                "shape": (n_joints,),
+                "names": [joint_name_list],
+            },
+        }
 
-        with open(ds_dir / "meta" / "episodes.jsonl", "a") as jf:
-            jf.write(json.dumps({"episode_index": int(next_idx), "tasks": ["VR录制"], "length": n}, ensure_ascii=False) + "\n")
-        with open(ds_dir / "meta" / "tasks.jsonl", "a") as jf:
-            jf.write(json.dumps({"task_index": int(next_idx), "task": "VR录制"}, ensure_ascii=False) + "\n")
+        # 创建或打开数据集
+        if ds_full_path.exists() and (ds_full_path / "meta" / "info.json").exists():
+            dataset = LeRobotDataset(ds_repo_id, root=str(ds_full_path))
+        else:
+            dataset = LeRobotDataset.create(
+                repo_id=ds_repo_id,
+                fps=30,
+                features=features,
+                root=str(ds_full_path),
+                robot_type="F1",
+                use_videos=False,
+            )
+
+        # 逐帧写入 —— action 比 state 超前一步
+        for i in range(n):
+            next_i = min(i + 1, n - 1)
+            dataset.add_frame({
+                "observation.state": joints_rad[i].astype(np.float32),
+                "action": joints_rad[next_i].astype(np.float32),
+                "task": "VR录制",
+            })
+
+        dataset.save_episode()
+        dataset.finalize()
+        print(f"[REC] 已生成 LeRobot: {ds_full_path}  (episode #{next_idx})")
 
     except Exception as e:
         print(f"[REC] LeRobot 生成失败: {e}")
         print("[REC] 提示: 可以手动跑 python scripts/07_offline_ik.py --input", h5_path)
 
-    return h5_path
-
-
-# ============================================================================
-# WebSocket —— 核心数据通道
-# ============================================================================
-@app.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket):
-    await ws.accept()
-    state = app.state.dashboard
-    state.clients.add(ws)
-
-    # 把已有历史发过去（最近 30 秒），让新打开的页面能追上
-    cutoff = time.time() - 30
-    for frame in state.ring:
-        if frame.get("ts", 0) >= cutoff:
-            await _safe_send(ws, {"type": "frame", "data": frame})
-
-    try:
-        while True:
-            raw = await asyncio.wait_for(ws.receive_text(), timeout=30)
-            try:
-                msg = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-
-            if msg.get("type") == "start_record":
-                state.start_recording()
-                await _safe_send(ws, {"type": "recording_changed", "recording": True})
-            elif msg.get("type") == "stop_record":
-                frames = state.stop_recording()
-                await _safe_send(ws, {"type": "recording_changed", "recording": False})
-                if frames:
-                    h5_path = _save_hdf5(frames, state)
-                    await _safe_send(ws, {
-                        "type": "alert",
-                        "time": datetime.now().strftime("%H:%M:%S"),
-                        "level": "info",
-                        "msg": f"录制完成: {len(frames)} 帧 → {h5_path.name}",
-                    })
-            elif msg.get("type") == "ping":
-                await _safe_send(ws, {"type": "pong"})
-    except (WebSocketDisconnect, asyncio.TimeoutError):
-        pass
-    finally:
-        state.clients.discard(ws)
-
-
-async def _safe_send(ws: WebSocket, msg: dict):
-    try:
-        await ws.send_json(msg)
-    except Exception:
-        pass
-
-
-# ============================================================================
-# 后台循环 —— UDP → IK → 广播
-# ============================================================================
-async def processing_loop(state: DashboardState, ik: IKProcessor | None, fps: int):
-    """主循环：每 1/fps 秒跑一帧"""
-    interval = 1.0 / fps
-    last_frame_ts = time.time()
-    last_status_broadcast = 0
-    last_wrist = {"Left": None, "Right": None}  # 缓存上一次有效的手腕数据
-
-    print(f"[LOOP] 开始处理，{fps} FPS")
-
-    while True:
-        await asyncio.sleep(interval * 0.5)  # 半间隔检查一次，减少延迟
-
-        # 取 UDP 原始数据
-        raw_batch = state.drain_raw()
-        for raw in raw_batch:
-            side = raw["side"]
-            ptype = raw["type"]
-            if ptype == "wrist":
-                last_wrist[side] = raw["values"]
-
-        # 按 FPS 节流
-        now = time.time()
-        if now - last_frame_ts < interval:
-            continue
-        last_frame_ts = now
-
-        # 没有手部数据就跳过
-        if last_wrist["Left"] is None and last_wrist["Right"] is None:
-            # 每 2 秒广播一次状态（让前端知道还在等数据）
-            if now - last_status_broadcast > 2:
-                await _broadcast_status(state)
-                last_status_broadcast = now
-            continue
-
-        ts = time.time()
-        r_raw = last_wrist.get("Right")  # 7值原始VR数据
-        l_raw = last_wrist.get("Left")
-        frame = {
-            "ts": ts,
-            "joints": None,
-            "right_wrist": r_raw,
-            "left_wrist": l_raw,
-            "right_ik_ok": False,
-            "left_ik_ok": False,
-        }
-
-        # IK
-        if ik is not None and state.ik_enabled:
-            result = ik.solve_frame(
-                r_raw,
-                l_raw,
-                state.right_guess,
-                state.left_guess,
-            )
-            frame["joints"] = result["joints"]
-            frame["right_wrist"] = result["right_wrist"]   # 3值（IK后的位置，给面板显示）
-            frame["left_wrist"] = result["left_wrist"]
-            frame["right_wrist_raw"] = r_raw               # 7值原始VR数据（给HDF5存）
-            frame["left_wrist_raw"] = l_raw
-            frame["right_ik_ok"] = result["right_ik_ok"]
-            frame["left_ik_ok"] = result["left_ik_ok"]
-            state.right_guess = result["right_guess"]
-            state.left_guess = result["left_guess"]
-            state.ik_total += 1
-            if result["right_ik_ok"]:
-                state.right_ok_count += 1
-            if result["left_ik_ok"]:
-                state.left_ok_count += 1
-            if not result["right_ik_ok"]:
-                state.add_alert("error", f"右手 IK 失败 #{state.ik_total}")
-            if not result["left_ik_ok"]:
-                state.add_alert("error", f"左手 IK 失败 #{state.ik_total}")
-        else:
-            # 无 IK 模式：直接传手部位移当伪关节角（调试用）
-            r = last_wrist.get("Right", [0]*3)
-            l = last_wrist.get("Left", [0]*3)
-            frame["joints"] = [r[0], r[1], r[2]] + [0]*7 + [l[0], l[1], l[2]] + [0]*7
-
-        state.add_frame(frame)
-        state.record_frame(frame)
-
-        # 广播给所有客户端
-        await _broadcast_frame(state, frame)
-
-        # 每 1 秒广播一次状态
-        if now - last_status_broadcast > 1:
-            await _broadcast_status(state)
-            last_status_broadcast = now
-
-
-async def _broadcast_frame(state: DashboardState, frame: dict):
-    if not state.clients:
-        return
-    payload = {"type": "frame", "data": frame}
-    dead = set()
-    for ws in state.clients:
-        try:
-            await ws.send_json(payload)
-        except Exception:
-            dead.add(ws)
-    state.clients -= dead
-
-
-async def _broadcast_status(state: DashboardState):
-    if not state.clients:
-        return
-    payload = {"type": "status", "data": state.get_status()}
-    dead = set()
-    for ws in state.clients:
-        try:
-            await ws.send_json(payload)
-        except Exception:
-            dead.add(ws)
-    state.clients -= dead
-
-
-# ============================================================================
-# 启动
-# ============================================================================
-def main():
-    args = parser.parse_args()
-    state = DashboardState(max_ring=args.fps * 30, max_history=args.max_history, alert_deg=args.alert_threshold)
-
-    # IK 处理器
-    ik = None
-    if not args.no_ik:
-        try:
-            ik = IKProcessor()
-            state.ik_enabled = True
-        except Exception as e:
-            print(f"[IK] 加载失败: {e}")
-            print("[IK] 将用 --no-ik 模式运行（只显示手部原始数据）")
-            state.ik_enabled = False
-
-    # 挂到 app 上
-    app.state.dashboard = state
-
-    # 回放模式 vs 实时模式
-    if args.replay:
-        print(f"[REPLAY] 回放模式: {args.replay}")
-        # TODO: 回放模式（后面再加）
-        print("[REPLAY] 回放模式暂未实现，请使用实时模式")
-        return
-
-    # 启动 UDP 监听线程
-    stop_event = threading.Event()
-    udp_thread = threading.Thread(
-        target=udp_listener,
-        args=(args.port, args.host, state, stop_event),
-        daemon=True,
-    )
-    udp_thread.start()
-
-    # 把 IK processor 挂到 state 上（api 需要）
-    state.ik_processor = ik
-
-    # 启动后台处理循环（通过 router event，比 on_event/lifespan 兼容性好）
-    processing_task = None
-
-    async def on_startup():
-        nonlocal processing_task
-        processing_task = asyncio.create_task(processing_loop(state, ik, args.fps))
-
-    async def on_shutdown():
-        if processing_task:
-            processing_task.cancel()
-        stop_event.set()
-        print("[MAIN] 服务关闭")
-
-    app.router.add_event_handler("startup", on_startup)
-    app.router.add_event_handler("shutdown", on_shutdown)
-
-    print(f"""
-+==========================================================+
-|  F1 VR 遥操数据实时可视化平台                             |
-|                                                          |
-|  >> 浏览器打开: http://localhost:{args.web_port}              |
-|                                                          |
-|  UDP 端口: {args.port}                                        |
-|  IK 状态:   {'[OK] 已加载' if ik else '[!] 未启用 (--no-ik)'}                |
-|                                                          |
-|  戴上 Quest 3，打开 Hand Tracking Streamer，              |
-|  然后刷新浏览器页面就能看到实时曲线了。                     |
-+==========================================================+
-""")
-
-    uvicorn.run(app, host="0.0.0.0", port=args.web_port, log_level="warning")
-
-
-if __name__ == "__main__":
-    main()

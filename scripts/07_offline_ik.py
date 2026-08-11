@@ -8,13 +8,15 @@ import numpy as np
 import h5py
 import argparse
 import json
-import pandas as pd
 from pathlib import Path
 from datetime import datetime
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent))
 from ik_solver import F1Kinematics, hand_pose_to_robot_target
+
+# 官方 LeRobot API（参照 openpi convert_aloha_data_to_lerobot.py）
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--input", type=str, default="./recordings/episode_000000.h5")
@@ -95,23 +97,27 @@ for i in range(n_frames):
 print(f"\n  Right IK solved: {right_ok}/{n_frames}")
 print(f"  Left IK solved:  {left_ok}/{n_frames}")
 
-# ---- Save enhanced HDF5 ----
+# ---- Save enhanced HDF5 (raw backup, 弧度制) ----
 h5_out = h5_path.with_suffix(".ik.h5")
 with h5py.File(str(h5_out), "w") as f:
-    # Copy original datasets
     with h5py.File(str(h5_path), "r") as src:
         for key in src.keys():
             src.copy(key, f)
         for key in src.attrs:
             f.attrs[key] = src.attrs[key]
 
-    # Add/overwrite joint angle data
     if "observation.state" in f:
         del f["observation.state"]
     if "action" in f:
         del f["action"]
+
+    # action 比 state 超前一步（与 LeRobot 写入语义一致）
+    joint_actions = np.zeros_like(joint_angles_all)
+    joint_actions[:-1] = joint_angles_all[1:]          # action[i] = state[i+1]
+    joint_actions[-1] = joint_angles_all[-1]            # 最后一帧指向自己
+
     f.create_dataset("observation.state", data=joint_angles_all)
-    f.create_dataset("action", data=joint_angles_all)
+    f.create_dataset("action", data=joint_actions)
     f.create_dataset("joint_names", data=np.array(all_joint_names, dtype=h5py.string_dtype()))
     f.attrs["ik_processed"] = True
     f.attrs["ik_right_solved"] = right_ok
@@ -120,65 +126,68 @@ with h5py.File(str(h5_out), "w") as f:
 
 print(f"  HDF5+IK: {h5_out}")
 
-# ---- LeRobot ----
-ds_dir = Path(f"./datasets/{args.dataset}")
-(ds_dir / "meta").mkdir(parents=True, exist_ok=True)
-(ds_dir / "data" / "chunk-000").mkdir(parents=True, exist_ok=True)
+# ---- LeRobot (official API, 参照 openpi convert_aloha_data_to_lerobot.py) ----
+ds_root = Path("./datasets")
+ds_repo_id = args.dataset
+ds_full_path = ds_root / ds_repo_id
 
-# extract episode index from input filename
-ep_idx = int(h5_path.stem.split("_")[-1])  # e.g. episode_000001.h5 -> 1
-
-records = []
-for i in range(n_frames):
-    records.append({
-        "observation.state": joint_angles_all[i].tolist(),
-        "action": joint_angles_all[i].tolist(),
-        "timestamp": float(timestamps[i]),
-        "episode_index": int(ep_idx),
-        "index": i,
-        "task_index": 0,
-        "next.done": (i == n_frames - 1),
-        "next.reward": 1.0 if i == n_frames - 1 else 0.0,
-    })
-
-df = pd.DataFrame(records)
-pq_path = ds_dir / "data" / "chunk-000" / f"episode_{ep_idx:06d}.parquet"
-df.to_parquet(str(pq_path), engine="pyarrow")
-
-features = {k: v for k, v in {
-    "observation.state": {"dtype": "float32", "shape": [n_joints]},
-    "action": {"dtype": "float32", "shape": [n_joints]},
-    "timestamp": {"dtype": "float32", "shape": [1]},
-    "episode_index": {"dtype": "int64", "shape": [1]},
-    "index": {"dtype": "int64", "shape": [1]},
-    "task_index": {"dtype": "int64", "shape": [1]},
-    "next.done": {"dtype": "bool", "shape": [1]},
-    "next.reward": {"dtype": "float32", "shape": [1]},
-}.items()}
-
-info = {
-    "codebase_version": "v3.0",
-    "robot_type": "F1",
-    "fps": 30,
-    "total_episodes": 1,
-    "total_frames": int(n_frames),
-    "features": features,
-    "joint_names": [str(j) for j in all_joint_names],
-    "n_joints": int(n_joints),
+# 构建 features —— 关节名写进 names 字段，OpenPI DataConfig repack 会用到
+joint_name_list = [str(j) for j in all_joint_names]
+features = {
+    "observation.state": {
+        "dtype": "float32",
+        "shape": (n_joints,),
+        "names": [joint_name_list],
+    },
+    "action": {
+        "dtype": "float32",
+        "shape": (n_joints,),
+        "names": [joint_name_list],
+    },
 }
 
-with open(ds_dir / "meta" / "info.json", "w") as f:
-    json.dump(info, f, indent=2)
-with open(ds_dir / "meta" / "episodes.jsonl", "w") as f:
-    f.write(json.dumps({"episode_index": 0, "tasks": [args.task], "length": n_frames}) + "\n")
-with open(ds_dir / "meta" / "tasks.jsonl", "w") as f:
-    f.write(json.dumps({"task_index": 0, "task": args.task}) + "\n")
+# 创建或打开数据集（第一个 episode 用 create，后续追加用 open）
+if ds_full_path.exists() and (ds_full_path / "meta" / "info.json").exists():
+    print(f"[LeRobot] 打开已有数据集: {ds_full_path}")
+    dataset = LeRobotDataset(ds_repo_id, root=str(ds_full_path))
+else:
+    print(f"[LeRobot] 创建新数据集: {ds_full_path}")
+    dataset = LeRobotDataset.create(
+        repo_id=ds_repo_id,
+        fps=30,
+        features=features,
+        root=str(ds_full_path),
+        robot_type="F1",
+        use_videos=False,
+    )
 
-print(f"  LeRobot: {ds_dir}")
+# 逐帧写入 —— action 比 state 超前一步（参照官方转换脚本的 action/state 语义）
+for i in range(n_frames):
+    next_i = min(i + 1, n_frames - 1)
+    dataset.add_frame({
+        "observation.state": joint_angles_all[i].astype(np.float32),
+        "action": joint_angles_all[next_i].astype(np.float32),
+        "task": args.task,
+    })
+
+dataset.save_episode()
+dataset.finalize()
+
+ep_idx = int(h5_path.stem.split("_")[-1])
+print(f"  LeRobot: {ds_full_path}  (episode #{ep_idx} 已追加)")
 print(f"\n=== DONE ===")
 print(f"  Frames: {n_frames} -> {n_joints} DOF joint angles each")
 print(f"  Right IK ok: {right_ok}/{n_frames}, Left IK ok: {left_ok}/{n_frames}")
 print(f"  Sample (frame 0): {joint_angles_all[0][:3]}... (torso)")
+
+# 验证 action shift
+if n_frames >= 2:
+    state_first = joint_angles_all[0]
+    action_first = joint_angles_all[1]  # action[0] = state[1]
+    if np.allclose(state_first, action_first):
+        print("  [WARN] action[0] == state[0], shift 可能未生效")
+    else:
+        print(f"  [OK] action[0] != state[0], shift 生效")
 
 # Quick check: are joint angles non-zero?
 nonzero = np.count_nonzero(joint_angles_all)
