@@ -428,16 +428,21 @@ def record_ros2(args):
 # ---------------------------------------------------------------- 转换（PC 端）
 
 
-def convert_h5_to_lerobot(h5_path, dataset_name, out_dir, video_path=None):
+def convert_h5_to_lerobot(h5_path, dataset_name, out_dir, video_path=None,
+                          task="teleop manipulation", nan_mode="keep", force=False):
     """PC 端：把录制的 HDF5 转成 LeRobot 数据集（不需要 ROS）。
     HDF5 带机载画面时自动解码进数据集（视觉与关节天然同步）；
-    没画面时给 --video 则用录屏均匀采样对齐。"""
+    没画面时给 --video 则用录屏均匀采样对齐。
+
+    nan_mode: keep=保留 NaN（默认，仅告警）/ drop=剔除含 NaN 帧 / interp=按关节列插值
+    force: 目标数据集已存在时是否强制覆盖（默认拒绝，防止同名转换删旧数据）
+    """
     import h5py
 
     cam_jpegs = None
     with h5py.File(str(h5_path), "r") as f:
-        joints = f["observation.state"][:]
-        actions = f["action"][:]
+        joints = f["observation.state"][:].astype(np.float32)
+        actions = f["action"][:].astype(np.float32)
         attrs = dict(f.attrs)
         if CAM_KEY in f:
             cam_jpegs = [bytes(f[CAM_KEY][i]) for i in range(f[CAM_KEY].shape[0])]
@@ -447,7 +452,35 @@ def convert_h5_to_lerobot(h5_path, dataset_name, out_dir, video_path=None):
 
     nan_frames = int(np.isnan(joints).any(axis=1).sum())
     if nan_frames:
-        print(f"[WARN] {nan_frames}/{n} 帧含 NaN 关节角 —— 训练前需要处理（剔除或插值）")
+        print(f"[WARN] {nan_frames}/{n} 帧含 NaN 关节角（单臂未收到指令）")
+
+    # ---- NaN 处理：剔除 / 插值 / 保留 ----
+    if nan_mode == "drop" and nan_frames:
+        keep = ~np.isnan(joints).any(axis=1)
+        joints = joints[keep]
+        actions = actions[keep]
+        if cam_jpegs is not None:
+            cam_jpegs = [j for j, k in zip(cam_jpegs, keep) if k] or None
+        print(f"[NAN] drop: 剔除 {n - int(keep.sum())} 帧，剩 {int(keep.sum())} 帧")
+    elif nan_mode == "interp" and nan_frames:
+        for j in range(N_JOINTS):
+            col = joints[:, j]
+            bad = np.isnan(col)
+            if bad.any() and (~bad).any():
+                col[bad] = np.interp(np.flatnonzero(bad), np.flatnonzero(~bad), col[~bad])
+        # 插值后按录制契约重建 action（action[i] = state[i+1]）
+        actions = np.vstack([joints[1:], joints[-1:]])
+        remain = int(np.isnan(joints).any(axis=1).sum())
+        if remain:
+            print(f"[WARN] interp 后仍有 {remain} 帧含 NaN（整列缺失，该臂全程无指令），保留原值")
+        else:
+            print(f"[NAN] interp: 已按关节列插值 {nan_frames} 帧 NaN")
+    elif nan_frames:
+        print("[NAN] keep: NaN 原样进数据集 —— 训练前需自行清洗")
+    n = joints.shape[0]
+    if n == 0:
+        print("[ERR] NaN 处理后没有可用帧")
+        return None
 
     features = {
         "observation.state": {"dtype": "float32", "shape": (N_JOINTS,), "names": JOINT_NAMES_14},
@@ -499,7 +532,11 @@ def convert_h5_to_lerobot(h5_path, dataset_name, out_dir, video_path=None):
         }
 
     ds_dir = Path(out_dir) / dataset_name
-    if ds_dir.exists():
+    if ds_dir.exists() and not force:
+        print(f"[ERR] 数据集已存在: {ds_dir} —— 直接转换会覆盖旧数据")
+        print("      换一个 --dataset 名，或确认要覆盖时加 --force")
+        return None
+    if ds_dir.exists() and force:
         import shutil
         shutil.rmtree(ds_dir)
 
@@ -517,11 +554,12 @@ def convert_h5_to_lerobot(h5_path, dataset_name, out_dir, video_path=None):
         frame = {
             "observation.state": joints[i].astype(np.float32),
             "action": actions[i].astype(np.float32),
-            "task": f"PICO teleop session, {n} frames",
+            "task": task,
         }
         if images is not None:
             frame[CAM_KEY] = images[i]
         ds.add_frame(frame)
+    # lerobot 0.4.x 的 save_episode() 不接受 task 参数，task 由 add_frame 逐帧写入
     ds.save_episode()
     ds.finalize()
     print(f"[LeRobot] 已生成: {ds_dir}/  ({n} 帧, {fps:.1f} fps)")
@@ -541,6 +579,12 @@ if __name__ == "__main__":
                         help="PC 端模式：指定 HDF5 路径，转成 LeRobot 数据集后退出")
     parser.add_argument("--video", type=str, default=None,
                         help="PC 端模式：PICO 录屏视频，HDF5 无画面时与 --convert 一起用")
+    parser.add_argument("--task", type=str, default="teleop manipulation",
+                        help="任务描述（进 tasks.jsonl，训练 prompt 用）")
+    parser.add_argument("--nan", choices=["keep", "drop", "interp"], default="keep",
+                        help="NaN 帧处理：keep=保留(默认) drop=剔除 interp=按列插值")
+    parser.add_argument("--force", action="store_true",
+                        help="目标数据集已存在时强制覆盖（默认拒绝，防同名转换删旧数据）")
     args = parser.parse_args()
 
     if args.convert:
@@ -549,6 +593,7 @@ if __name__ == "__main__":
             print(f"[ERR] 文件不存在: {h5}")
             raise SystemExit(1)
         name = args.dataset or f"f1_ros2_{h5.stem.removeprefix('session_')}"
-        convert_h5_to_lerobot(h5, name, args.out, video_path=args.video)
+        convert_h5_to_lerobot(h5, name, args.out, video_path=args.video,
+                              task=args.task, nan_mode=args.nan, force=args.force)
     else:
         record_ros2(args)
