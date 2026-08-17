@@ -14,3 +14,5 @@ pico_apps/
 # OS
 .DS_Store
 Thumbs.db
+*.rtf
+videos/

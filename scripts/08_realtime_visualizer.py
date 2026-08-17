@@ -815,7 +815,11 @@ def _save_hdf5(frames: list, state: DashboardState) -> Path:
     with h5py.File(str(h5_path), "w") as f:
         f.create_dataset("timestamp", data=timestamps)
         f.create_dataset("observation.state", data=joints_rad)
-        f.create_dataset("action", data=joints_rad)
+        # action 比 state 超前一步（action[i] = state[i+1]，最后一帧指向自己）
+        joint_actions = np.zeros_like(joints_rad)
+        joint_actions[:-1] = joints_rad[1:]
+        joint_actions[-1] = joints_rad[-1]
+        f.create_dataset("action", data=joint_actions)
         f.create_dataset("observation.right_hand.wrist_pose", data=right_wrists)
         f.create_dataset("observation.left_hand.wrist_pose", data=left_wrists)
         f.create_dataset("episode_index", data=np.full(n, next_idx, dtype=np.int64))
