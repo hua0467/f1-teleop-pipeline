@@ -1,0 +1,13 @@
+PLACEHOLDER for assets/demo_video.mp4
+
+Replace this file with a short demo video (< 2 min) showing a complete
+teleoperation session:
+
+  - operator view (Quest 3 hand tracking, optional screen recording)
+  - robot view (third-person camera)
+  - optional: side-by-side with FK end-effector visualization
+
+Suggested content: pick up the cube, place, return — one full episode
+from the released dataset, with episode metadata overlaid.
+
+Encoding: H.264 MP4, <= 50 MB, 720p.

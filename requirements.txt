@@ -1,0 +1,37 @@
+# Python dependencies for the F1 VR teleoperation pipeline.
+#
+# Target environment: Ubuntu 22.04 + NVIDIA RTX 4090 (Python 3.10).
+# Data-collection scripts also run on Windows with the same packages.
+
+# --- numeric / data stack (IK solver, HDF5 recording, conversion) ---
+numpy>=1.26
+scipy>=1.11
+h5py>=3.10
+pandas>=2.1
+pyarrow>=14.0
+matplotlib>=3.8
+
+# --- config parsing (scripts/train_bc.py) ---
+pyyaml>=6.0
+
+# --- LeRobot: dataset format v3.0 + training CLI ---
+# Requires a PyTorch installation first (see note below).
+lerobot>=0.3.0,<1.0
+
+# --- video / image handling (optional, used by 01_test_environment.py) ---
+opencv-python>=4.8
+
+# ---------------------------------------------------------------------------
+# PyTorch with CUDA (install separately so the wheel matches your driver):
+#
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#
+# or, for CPU-only development machines:
+#
+#   pip install torch torchvision
+# ---------------------------------------------------------------------------
+
+# Optional: hand-tracking SDK used only by scripts/04_vr_hand_record.py
+# (an alternative to the raw-UDP recorders 05/06). Install from its own
+# repository if you use that recorder.
+# hand-tracking-sdk

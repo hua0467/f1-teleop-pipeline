@@ -1,0 +1,48 @@
+# Behavior Cloning training configuration (LeRobot `lerobot-train`).
+#
+# Usage:
+#   python scripts/train_bc.py --config configs/train_bc.yaml
+#
+# Any value below can be overridden from the command line, e.g.:
+#   python scripts/train_bc.py --training.offline_steps=50000 --seed=7
+#
+# The keys follow LeRobot's train-script arguments (dots = nesting).
+
+dataset:
+  # Local LeRobot dataset path (e.g. datasets/f1_vr_v2) or a Hugging Face
+  # repo id (e.g. "lerobot/pusht"). Verify the dataset loads first:
+  #   python -c "from lerobot.datasets.lerobot_dataset import LeRobotDataset; \
+  #              print(LeRobotDataset('datasets/f1_vr_v2'))"
+  repo_id: "datasets/f1_vr_v2"
+
+policy:
+  # Behavior Cloning policy. Alternatives supported by LeRobot:
+  # "act" (ACT, CVAE action chunking), "diffusion" (Diffusion Policy),
+  # "tdmpc". ACT is a solid default for state-only 17-DOF data.
+  type: "act"
+  n_action_steps: 20        # action-chunk horizon (ACT)
+  chunk_size: 100           # CVAE latent chunk size
+  dim_model: 512
+  dim_feedforward: 2048
+  n_heads: 8
+  n_encoder_layers: 6
+  n_decoder_layers: 6
+  dropout: 0.1
+
+training:
+  offline_steps: 20000      # total gradient steps
+  batch_size: 64
+  lr: 0.0001
+  grad_clip_norm: 10.0
+  online_steps: 0           # no online (rollout) training
+  eval_freq: -1             # -1 disables evaluation in a simulated env
+  save_freq: 5000           # checkpoint every N steps
+  log_freq: 100
+
+wandb:
+  enable: false             # set true + `wandb login` for experiment tracking
+
+output_dir: "outputs/train"
+device: "cuda"              # "cpu" if no GPU is available
+seed: 42
+num_workers: 8

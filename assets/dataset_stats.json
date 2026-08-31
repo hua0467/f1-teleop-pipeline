@@ -1,0 +1,253 @@
+{
+  "datasets": [
+    {
+      "name": "f1_vr_v2",
+      "episodes": 7,
+      "total_frames": 3913,
+      "state_dim": 17,
+      "joint_names": [
+        "lift_joint",
+        "waist1_joint",
+        "waist2_joint",
+        "J1_right_joint",
+        "J2_right_joint",
+        "J3_right_joint",
+        "J4_right_joint",
+        "J5_right_joint",
+        "J6_right_joint",
+        "J7_right_joint",
+        "J1_left_joint",
+        "J2_left_joint",
+        "J3_left_joint",
+        "J4_left_joint",
+        "J5_left_joint",
+        "J6_left_joint",
+        "J7_left_joint"
+      ],
+      "per_episode_frames": [
+        327,
+        516,
+        720,
+        192,
+        719,
+        717,
+        722
+      ],
+      "joint_stats": {
+        "joint": [
+          "lift_joint",
+          "waist1_joint",
+          "waist2_joint",
+          "J1_right_joint",
+          "J2_right_joint",
+          "J3_right_joint",
+          "J4_right_joint",
+          "J5_right_joint",
+          "J6_right_joint",
+          "J7_right_joint",
+          "J1_left_joint",
+          "J2_left_joint",
+          "J3_left_joint",
+          "J4_left_joint",
+          "J5_left_joint",
+          "J6_left_joint",
+          "J7_left_joint"
+        ],
+        "mean_rad": [
+          0.1658862829208374,
+          0.0905822366476059,
+          0.30386102199554443,
+          0.29448267817497253,
+          0.5476323366165161,
+          -0.5652275085449219,
+          -0.7850149869918823,
+          0.534348726272583,
+          -0.07759547233581543,
+          -0.4804236590862274,
+          1.017385482788086,
+          0.25928381085395813,
+          -0.5791482925415039,
+          -0.9726850390434265,
+          -0.7221425175666809,
+          -0.3795260787010193,
+          -0.1364668309688568
+        ],
+        "std_rad": [
+          0.04778759926557541,
+          0.4534609615802765,
+          0.2513277232646942,
+          0.32205814123153687,
+          0.5839614272117615,
+          0.44683441519737244,
+          0.7422224879264832,
+          0.4554653465747833,
+          0.4401302635669708,
+          0.6089044213294983,
+          0.418702632188797,
+          0.28793472051620483,
+          0.22699981927871704,
+          0.4937640130519867,
+          0.4560471177101135,
+          0.5019739866256714,
+          0.3018222153186798
+        ],
+        "min_rad": [
+          0.020897211506962776,
+          -0.8073956966400146,
+          0.0,
+          -0.1421688348054886,
+          0.0,
+          -1.6560351848602295,
+          -1.5700000524520874,
+          -0.13796167075634003,
+          -1.1299999952316284,
+          -1.5700000524520874,
+          -0.14722840487957,
+          0.0,
+          -2.2917587757110596,
+          -1.5700000524520874,
+          -2.1259548664093018,
+          -1.1299999952316284,
+          -0.4000000059604645
+        ],
+        "max_rad": [
+          0.20000000298023224,
+          0.8748106956481934,
+          1.0991078615188599,
+          1.0688815116882324,
+          2.4220831394195557,
+          0.0,
+          0.19457516074180603,
+          1.8823487758636475,
+          1.072695016860962,
+          0.4000000059604645,
+          2.1026229858398438,
+          1.1096032857894897,
+          -0.08335094153881073,
+          1.1329907178878784,
+          1.1359506845474243,
+          0.7104202508926392,
+          1.219287633895874
+        ]
+      }
+    }
+  ],
+  "ik": {
+    "episodes": [
+      {
+        "file": "episode_000000.ik.h5",
+        "left": {
+          "valid_frames": 327,
+          "solved": 0,
+          "reported_solved": 327
+        },
+        "right": {
+          "valid_frames": 0,
+          "solved": 0,
+          "reported_solved": 0
+        }
+      },
+      {
+        "file": "episode_000001.ik.h5",
+        "left": {
+          "valid_frames": 516,
+          "solved": 0,
+          "reported_solved": 516
+        },
+        "right": {
+          "valid_frames": 0,
+          "solved": 0,
+          "reported_solved": 0
+        }
+      },
+      {
+        "file": "episode_000005.ik.h5",
+        "left": {
+          "valid_frames": 720,
+          "solved": 0,
+          "reported_solved": 720
+        },
+        "right": {
+          "valid_frames": 719,
+          "solved": 0,
+          "reported_solved": 719
+        }
+      },
+      {
+        "file": "episode_000007.ik.h5",
+        "left": {
+          "valid_frames": 192,
+          "solved": 0,
+          "reported_solved": 192
+        },
+        "right": {
+          "valid_frames": 190,
+          "solved": 0,
+          "reported_solved": 190
+        }
+      },
+      {
+        "file": "episode_000009.ik.h5",
+        "left": {
+          "valid_frames": 719,
+          "solved": 0,
+          "reported_solved": 719
+        },
+        "right": {
+          "valid_frames": 718,
+          "solved": 0,
+          "reported_solved": 718
+        }
+      },
+      {
+        "file": "episode_000011.ik.h5",
+        "left": {
+          "valid_frames": 717,
+          "solved": 0,
+          "reported_solved": 717
+        },
+        "right": {
+          "valid_frames": 716,
+          "solved": 0,
+          "reported_solved": 716
+        }
+      },
+      {
+        "file": "episode_000013.ik.h5",
+        "left": {
+          "valid_frames": 722,
+          "solved": 0,
+          "reported_solved": 722
+        },
+        "right": {
+          "valid_frames": 721,
+          "solved": 0,
+          "reported_solved": 721
+        }
+      }
+    ],
+    "success": {
+      "left": {
+        "rate": 0.0,
+        "reported_rate": 1.0,
+        "valid_frames": 3913,
+        "solved": 0,
+        "reported_solved": 3913
+      },
+      "right": {
+        "rate": 0.0,
+        "reported_rate": 1.0,
+        "valid_frames": 3064,
+        "solved": 0,
+        "reported_solved": 3064
+      },
+      "overall": {
+        "rate": 0.0,
+        "reported_rate": 1.0,
+        "valid_frames": 6977,
+        "solved": 0,
+        "reported_solved": 6977
+      }
+    }
+  }
+}
