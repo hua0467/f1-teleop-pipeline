@@ -260,5 +260,5 @@ IK 解算器（待导师提供 F1 URDF）
 
 连上 WiFi 后：
 1. 戴上 Quest 3 → 打开 Hand Tracking Streamer
-2. 配置 IP: `192.168.9.2`，Port: `9000`，Protocol: UDP
+2. 配置 IP: `<PC 的局域网 IP>`，Port: `9000`，Protocol: UDP
 3. 我这边启动 PC 接收 → 实时看到手部坐标 → 录数据 → 转 LeRobot → 完成

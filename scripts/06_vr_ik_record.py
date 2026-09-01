@@ -35,7 +35,7 @@ if args.urdf:
 else:
     urdf_path = Path(__file__).parent.parent / "urdf" / "urdf" / "F1_URDF_V04.urdf"
     if not urdf_path.exists():
-        urdf_path = Path("C:/Users/Administrator/Desktop/F1_URDF_V04/urdf/F1_URDF_V04.urdf")
+        urdf_path = Path.home() / "F1_URDF_V04" / "urdf" / "F1_URDF_V04.urdf"
 
 print(f"[IK] Loading URDF: {urdf_path}")
 f1 = F1Kinematics(str(urdf_path))

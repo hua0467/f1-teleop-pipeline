@@ -259,7 +259,7 @@ def hand_pose_to_robot_target(hand_wrist, hand_quat=None):
       映射:   QuestY→RobotZ, Quest-Z→RobotX, Quest-X→RobotY
 
     下面这几个 scale/offset 是目测的，没经过物理标定。
-    需要蔚祺在 Isaac Sim 里跑一下看关节角合不合理。  ← TODO
+    需要后续在 Isaac Sim 里跑一下看关节角合不合理。  ← TODO
     """
 
     # 坐标轴重映射
@@ -285,9 +285,9 @@ def hand_pose_to_robot_target(hand_wrist, hand_quat=None):
 
 if __name__ == "__main__":
     # 直接跑这个脚本可以快速测一下 FK 和 IK
-    urdf_path = Path(__file__).parent.parent / "urdf" / "F1_URDF_V04.urdf"
+    urdf_path = Path(__file__).parent.parent / "urdf" / "urdf" / "F1_URDF_V04.urdf"
     if not urdf_path.exists():
-        urdf_path = Path("C:/Users/Administrator/Desktop/F1_URDF_V04/urdf/F1_URDF_V04.urdf")
+        urdf_path = Path.home() / "F1_URDF_V04" / "urdf" / "F1_URDF_V04.urdf"
 
     print(f"[Test] URDF: {urdf_path}")
     f1 = F1Kinematics(str(urdf_path))
